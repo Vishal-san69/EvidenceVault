@@ -504,3 +504,86 @@ described as production-ready.
 *Keep this README updated whenever setup commands, environment
 variables, API endpoints, database schema, AWS configuration, or project
 capabilities change.*
+
+## Latest Development Update — 7 November 2026
+
+### Case Request Response History
+
+Implemented and tested persistent response history for professional reviews of client case requests.
+
+**What was implemented**
+
+- Created the `case_request_responses` PostgreSQL table.
+- Added foreign keys linking response records to case requests and professionals.
+- Added validation constraints for previous status, new status, and review actions.
+- Added indexes for request-based and professional-based history retrieval.
+- Updated the `reviewCaseRequest` controller to save every professional decision.
+- Integrated response-history insertion into the existing database transaction.
+- Preserved audit logging for case-request creation and review decisions.
+
+### How It Works
+
+When a professional reviews a client case request:
+
+1. The API validates the request ID and review action.
+2. The backend verifies that the professional owns the request.
+3. PostgreSQL locks the request row using `FOR UPDATE`.
+4. The case-request status is updated.
+5. A response-history record is inserted into `case_request_responses`.
+6. An audit-log entry is created in `audit_logs`.
+7. All operations are committed together in one database transaction.
+
+If an operation fails, the transaction is rolled back to prevent inconsistent records.
+
+### Supported Review Actions
+
+| Action | Resulting status |
+|---|---|
+| accept | accepted |
+| reject | rejected |
+| request_information | needs_information |
+
+### API Endpoints Tested
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/case-requests` | Client submits a case request |
+| GET | `/api/professionals` | Retrieve professional directory |
+| GET | `/api/case-requests/received?status=pending` | Professional retrieves pending requests |
+| PATCH | `/api/case-requests/:id/review` | Professional reviews a request |
+
+### Database Verification
+
+Verified the implementation directly in PostgreSQL.
+
+**Response history verification:**
+- Previous status: `pending`
+- New status: `accepted`
+- Action: `accept`
+- Professional response message: Successfully stored.
+- Timestamp: Automatically generated.
+
+**Audit log verification:**
+- `CASE_REQUEST_CREATED`
+- `CASE_REQUEST_ACCEPTED`
+
+Both events were confirmed in the `audit_logs` table.
+
+### Testing Results
+
+- Client case-request submission: Passed
+- Professional directory retrieval: Passed
+- Professional request retrieval: Passed
+- Professional acceptance: Passed
+- Response-history persistence: Passed
+- Audit-log persistence: Passed
+- PostgreSQL schema and constraints: Verified
+
+### Next Development Tasks
+
+1. Implement `GET /api/case-requests/:id/responses`.
+2. Restrict response-history access to the owning client and assigned professional.
+3. Test response-history retrieval and unauthorized access.
+4. Continue formal case creation and administrator approval workflow.
+
+**Current status:** Case-request creation, professional review, response-history persistence, and audit logging are implemented and tested.
