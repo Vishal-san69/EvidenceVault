@@ -47,12 +47,12 @@ const register = async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    const result = await pool.query(
-      `INSERT INTO users (full_name, email, password_hash)
-       VALUES ($1, $2, $3)
-       RETURNING id, full_name, email, role, created_at`,
-      [full_name, normalizedEmail, passwordHash]
-    );
+const result = await pool.query(
+  `INSERT INTO users (full_name, email, password_hash, role)
+   VALUES ($1, $2, $3, 'client')
+   RETURNING id, full_name, email, role, created_at`,
+  [full_name, normalizedEmail, passwordHash]
+);
 
     return res.status(201).json({
       success: true,

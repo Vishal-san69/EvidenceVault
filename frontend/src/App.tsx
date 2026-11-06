@@ -1,4 +1,4 @@
-
+﻿
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -27,6 +27,7 @@ import {
   UploadCloud,
   X,
 } from "lucide-react";
+import { isAxiosError } from "axios";
 import api from "./services/api";
 
 type User = {
@@ -84,6 +85,18 @@ const getFileIcon = (contentType: string) => {
   return FileText;
 };
 
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (isAxiosError<{ message?: string }>(error)) {
+    return error.response?.data?.message || fallback;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return fallback;
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -113,9 +126,12 @@ export default function App() {
     window.setTimeout(() => setNotice(null), 4500);
   };
 
-  const loadDocuments = useCallback(async () => {
-    const response = await api.get("/documents/my-documents");
-    setDocuments(response.data.documents ?? []);
+  const loadDocuments = useCallback(async (): Promise<DocumentRecord[]> => {
+    const response = await api.get<{ documents?: DocumentRecord[] }>(
+      "/documents/my-documents",
+    );
+
+    return response.data.documents ?? [];
   }, []);
 
   const loadCurrentUser = useCallback(async () => {
@@ -125,7 +141,7 @@ export default function App() {
 
   useEffect(() => {
     const initialize = async () => {
-      const token = localStorage.getItem("cloudvault_token");
+      const token = localStorage.getItem("evidencevault_token");
 
       if (!token) {
         setPageLoading(false);
@@ -135,7 +151,7 @@ export default function App() {
       try {
         await loadCurrentUser();
       } catch {
-        localStorage.removeItem("cloudvault_token");
+        localStorage.removeItem("evidencevault_token");
         setUser(null);
       } finally {
         setPageLoading(false);
@@ -148,9 +164,23 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
-    loadDocuments().catch(() => {
-      showNotice("error", "Unable to load your documents.");
-    });
+    let isActive = true;
+
+    void loadDocuments()
+      .then((result) => {
+        if (isActive) {
+          setDocuments(result);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          showNotice("error", "Unable to load your documents.");
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
   }, [user, loadDocuments]);
 
   const handleLogin = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -171,31 +201,30 @@ export default function App() {
         password,
       });
 
-      localStorage.setItem("cloudvault_token", response.data.token);
+      localStorage.setItem("evidencevault_token", response.data.token);
       await loadCurrentUser();
 
       setPassword("");
       showNotice(
         "success",
         authMode === "register"
-          ? "Your CloudVault account has been created."
-          : "Welcome back to CloudVault AI.",
+          ? "Your EvidenceVault account has been created."
+          : "Welcome back to EvidenceVault.",
       );
-    } catch (error: any) {
-      const message =
-        error.response?.data?.message ||
-        (authMode === "register"
+    } catch (error: unknown) {
+      const fallback =
+        authMode === "register"
           ? "Unable to create your account."
-          : "Login failed. Check your credentials.");
+          : "Login failed. Check your credentials.";
 
-      showNotice("error", message);
+      showNotice("error", getErrorMessage(error, fallback));
     } finally {
       setAuthLoading(false);
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("cloudvault_token");
+    localStorage.removeItem("evidencevault_token");
     setUser(null);
     setDocuments([]);
     setActivePage("Dashboard");
@@ -245,15 +274,15 @@ export default function App() {
       }
 
       await api.post(`/documents/${document.id}/confirm`);
-      await loadDocuments();
+      setDocuments(await loadDocuments());
 
       showNotice("success", `${file.name} uploaded successfully.`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Document upload error:", error);
 
       showNotice(
         "error",
-        error.message || "Upload failed. Please try again.",
+        getErrorMessage(error, "Upload failed. Please try again."),
       );
     } finally {
       setUploading(false);
@@ -282,10 +311,10 @@ export default function App() {
       link.remove();
 
       showNotice("success", "Your download has started.");
-    } catch (error: any) {
+    } catch (error: unknown) {
       showNotice(
         "error",
-        error.response?.data?.message || "Unable to download this document.",
+        getErrorMessage(error, "Unable to download this document."),
       );
     } finally {
       setBusyDocument(null);
@@ -303,12 +332,12 @@ export default function App() {
 
     try {
       await api.delete(`/documents/${document.id}`);
-      await loadDocuments();
+      setDocuments(await loadDocuments());
       showNotice("success", "Document deleted successfully.");
-    } catch (error: any) {
+    } catch (error: unknown) {
       showNotice(
         "error",
-        error.response?.data?.message || "Unable to delete this document.",
+        getErrorMessage(error, "Unable to delete this document."),
       );
     } finally {
       setBusyDocument(null);
@@ -430,7 +459,7 @@ export default function App() {
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg-primary)]">
         <div className="neu-panel flex items-center gap-3 px-7 py-5 text-[var(--text-secondary)]">
           <Loader2 className="animate-spin text-[var(--accent)]" />
-          Loading CloudVault AI...
+          Loading EvidenceVault...
         </div>
       </div>
     );
@@ -445,7 +474,7 @@ export default function App() {
               <ShieldCheck size={39} className="text-[var(--accent-light)]" />
             </div>
             <h1 className="text-3xl font-bold tracking-tight">
-              CloudVault <span className="text-[var(--accent)]">AI</span>
+              EvidenceVault <span className="text-[var(--accent)]">AI</span>
             </h1>
             <p className="mt-2 text-sm text-[var(--text-secondary)]">
               Your private space in the cloud.
@@ -546,7 +575,7 @@ export default function App() {
 
             <div className="text-center text-sm text-[var(--text-secondary)]">
               {authMode === "login"
-                ? "New to CloudVault? "
+                ? "New to EvidenceVault? "
                 : "Already have an account? "}
               <button
                 type="button"
@@ -591,7 +620,7 @@ export default function App() {
             <ShieldCheck size={25} className="text-[var(--accent-light)]" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-lg font-bold tracking-tight">CloudVault AI</h1>
+            <h1 className="text-lg font-bold tracking-tight">EvidenceVault</h1>
             <p className="text-xs text-[var(--text-muted)]">Secure cloud storage</p>
           </div>
           <button
@@ -654,7 +683,7 @@ export default function App() {
             </button>
           </div>
           <p className="mt-5 text-center text-[10px] text-[var(--text-muted)]">
-            CloudVault AI · Secure workspace
+            EvidenceVault · Secure workspace
           </p>
         </div>
       </aside>
@@ -1186,7 +1215,7 @@ export default function App() {
             <section className="neu-panel max-w-3xl p-6 md:p-8">
               <h3 className="text-xl font-semibold">Account Settings</h3>
               <p className="mt-2 text-sm text-[var(--text-secondary)]">
-                Your CloudVault account information.
+                Your EvidenceVault account information.
               </p>
 
               <div className="neu-inset mt-7 space-y-5 rounded-2xl p-5">
@@ -1217,7 +1246,7 @@ export default function App() {
           )}
 
           <footer className="border-t border-white/[0.04] py-5 text-center text-xs text-[var(--text-muted)]">
-            CloudVault AI · Secure cloud document management
+            EvidenceVault · Secure cloud document management
           </footer>
         </div>
       </main>

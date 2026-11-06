@@ -17,16 +17,18 @@ const {
   deleteS3Object,
 } = require("../services/s3.service");
 
+// Upload validation
 const uploadSchema = z.object({
   original_name: z.string().trim().min(1).max(255),
   content_type: z.string().min(1),
   file_size_bytes: z.number().int().positive().max(MAX_FILE_SIZE),
 });
 
-// REQUEST UPLOAD URL
-const requestUpload = async (req, res) => {
-  let key;
+// ============================================================
+// 1. REQUEST UPLOAD URL
+// ============================================================
 
+const requestUpload = async (req, res) => {
   try {
     const validation = uploadSchema.safeParse(req.body);
 
@@ -38,8 +40,11 @@ const requestUpload = async (req, res) => {
       });
     }
 
-    const { original_name, content_type, file_size_bytes } =
-      validation.data;
+    const {
+      original_name,
+      content_type,
+      file_size_bytes,
+    } = validation.data;
 
     const extension = path.extname(original_name).toLowerCase();
 
@@ -52,20 +57,34 @@ const requestUpload = async (req, res) => {
       });
     }
 
-    key = `users/${req.user.id}/${randomUUID()}${extension}`;
+    // Generate a unique S3 object key
+    const key = `users/${req.user.id}/${randomUUID()}${extension}`;
 
+    // Generate presigned upload URL
     const uploadUrl = await generateUploadUrl({
       key,
       contentType: content_type,
     });
 
+    // Create pending document record
     const result = await pool.query(
       `INSERT INTO documents
-       (user_id, original_name, s3_key, content_type,
-        file_size_bytes, status)
+       (
+         user_id,
+         original_name,
+         s3_key,
+         content_type,
+         file_size_bytes,
+         status
+       )
        VALUES ($1, $2, $3, $4, $5, 'pending')
-       RETURNING id, original_name, content_type,
-                 file_size_bytes, status, created_at`,
+       RETURNING
+         id,
+         original_name,
+         content_type,
+         file_size_bytes,
+         status,
+         created_at`,
       [
         req.user.id,
         original_name,
@@ -93,14 +112,20 @@ const requestUpload = async (req, res) => {
   }
 };
 
-// CONFIRM UPLOAD
+// ============================================================
+// 2. CONFIRM UPLOAD
+// ============================================================
+
 const confirmUpload = async (req, res) => {
   try {
     const { id } = req.params;
 
     const result = await pool.query(
-      `SELECT * FROM documents
-       WHERE id = $1 AND user_id = $2 AND status = 'pending'`,
+      `SELECT *
+       FROM documents
+       WHERE id = $1
+         AND user_id = $2
+         AND status = 'pending'`,
       [id, req.user.id]
     );
 
@@ -113,17 +138,21 @@ const confirmUpload = async (req, res) => {
 
     const document = result.rows[0];
 
+    // Verify uploaded object in S3
     const object = await verifyUploadedObject(document.s3_key);
 
-    if (
-      Number(object.ContentLength) !== Number(document.file_size_bytes) ||
-      object.ContentType !== document.content_type ||
-      object.ServerSideEncryption !== "AES256"
-    ) {
+    const isValid =
+      Number(object.ContentLength) ===
+        Number(document.file_size_bytes) &&
+      object.ContentType === document.content_type &&
+      object.ServerSideEncryption === "AES256";
+
+    if (!isValid) {
       await deleteS3Object(document.s3_key);
 
       await pool.query(
-        "DELETE FROM documents WHERE id = $1 AND user_id = $2",
+        `DELETE FROM documents
+         WHERE id = $1 AND user_id = $2`,
         [id, req.user.id]
       );
 
@@ -133,12 +162,20 @@ const confirmUpload = async (req, res) => {
       });
     }
 
+    // Mark document as active
     const updated = await pool.query(
       `UPDATE documents
-       SET status = 'active', updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND user_id = $2
-       RETURNING id, original_name, content_type,
-                 file_size_bytes, status, created_at`,
+       SET status = 'active',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+         AND user_id = $2
+       RETURNING
+         id,
+         original_name,
+         content_type,
+         file_size_bytes,
+         status,
+         created_at`,
       [id, req.user.id]
     );
 
@@ -157,14 +194,23 @@ const confirmUpload = async (req, res) => {
   }
 };
 
-// LIST MY DOCUMENTS
+// ============================================================
+// 3. LIST MY DOCUMENTS
+// ============================================================
+
 const getMyDocuments = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, original_name, content_type,
-              file_size_bytes, status, created_at
+      `SELECT
+         id,
+         original_name,
+         content_type,
+         file_size_bytes,
+         status,
+         created_at
        FROM documents
-       WHERE user_id = $1 AND status = 'active'
+       WHERE user_id = $1
+         AND status = 'active'
        ORDER BY created_at DESC`,
       [req.user.id]
     );
@@ -183,15 +229,25 @@ const getMyDocuments = async (req, res) => {
   }
 };
 
-// REQUEST DOWNLOAD URL
+// ============================================================
+// 4. REQUEST DOWNLOAD URL
+// ============================================================
+
 const requestDownload = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Check document ownership and status
     const result = await pool.query(
-      `SELECT id, original_name, s3_key, content_type
+      `SELECT
+         id,
+         original_name,
+         s3_key,
+         content_type
        FROM documents
-       WHERE id = $1 AND user_id = $2 AND status = 'active'`,
+       WHERE id = $1
+         AND user_id = $2
+         AND status = 'active'`,
       [id, req.user.id]
     );
 
@@ -204,11 +260,17 @@ const requestDownload = async (req, res) => {
 
     const document = result.rows[0];
 
-    const downloadUrl = await generateDownloadUrl(document.s3_key);
+    // Pass original filename to force browser download
+    const downloadUrl = await generateDownloadUrl(
+      document.s3_key,
+      document.original_name
+    );
 
     return res.status(200).json({
       success: true,
+      message: "Download URL generated",
       download_url: downloadUrl,
+      filename: document.original_name,
       expires_in: 300,
     });
   } catch (error) {
@@ -221,15 +283,21 @@ const requestDownload = async (req, res) => {
   }
 };
 
-// DELETE DOCUMENT
+// ============================================================
+// 5. DELETE DOCUMENT
+// ============================================================
+
 const deleteDocument = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Check ownership and document status
     const result = await pool.query(
       `SELECT id, s3_key
        FROM documents
-       WHERE id = $1 AND user_id = $2 AND status = 'active'`,
+       WHERE id = $1
+         AND user_id = $2
+         AND status = 'active'`,
       [id, req.user.id]
     );
 
@@ -240,12 +308,18 @@ const deleteDocument = async (req, res) => {
       });
     }
 
-    await deleteS3Object(result.rows[0].s3_key);
+    const document = result.rows[0];
 
+    // Delete object from S3
+    await deleteS3Object(document.s3_key);
+
+    // Update database status
     await pool.query(
       `UPDATE documents
-       SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND user_id = $2`,
+       SET status = 'deleted',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+         AND user_id = $2`,
       [id, req.user.id]
     );
 
@@ -262,6 +336,10 @@ const deleteDocument = async (req, res) => {
     });
   }
 };
+
+// ============================================================
+// EXPORT CONTROLLERS
+// ============================================================
 
 module.exports = {
   requestUpload,

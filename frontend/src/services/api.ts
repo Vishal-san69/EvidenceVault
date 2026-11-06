@@ -1,8 +1,8 @@
-
+﻿
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "http://localhost:5000/api",
+  baseURL: "http://localhost:5001/api",
   headers: {
     "Content-Type": "application/json",
   },
@@ -11,7 +11,7 @@ const api = axios.create({
 
 // Attach JWT token automatically to protected requests.
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("cloudvault_token");
+  const token = localStorage.getItem("evidencevault_token");
 
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -25,7 +25,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem("cloudvault_token");
+      localStorage.removeItem("evidencevault_token");
     }
 
     return Promise.reject(error);

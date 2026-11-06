@@ -44,10 +44,16 @@ const verifyUploadedObject = async (key) => {
 };
 
 // Generate download URL
-const generateDownloadUrl = async (key) => {
+const generateDownloadUrl = async (key, originalName) => {
+  const safeFilename = encodeURIComponent(originalName)
+    .replace(/['()]/g, escape)
+    .replace(/\*/g, "%2A");
+
   const command = new GetObjectCommand({
     Bucket: BUCKET,
     Key: key,
+    ResponseContentDisposition:
+      `attachment; filename*=UTF-8''${safeFilename}`,
   });
 
   return getSignedUrl(s3Client, command, {
