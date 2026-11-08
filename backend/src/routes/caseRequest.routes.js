@@ -6,7 +6,10 @@ const {
   createCaseRequest,
   getReceivedCaseRequests,
   reviewCaseRequest,
+  getCaseRequestResponses,
+  convertCaseRequest,
 } = require("../controllers/caseRequest.controller");
+
 
 const router = express.Router();
 
@@ -32,6 +35,20 @@ router.patch(
   "/:id/review",
   requireRole("lawyer", "investigator"),
   reviewCaseRequest
+);
+
+// Clients and assigned professionals view response history.
+router.get(
+  "/:id/responses",
+  requireRole("client", "lawyer", "investigator"),
+  getCaseRequestResponses
+);
+
+// Convert an accepted request into a formal case.
+router.post(
+  "/:id/convert",
+  requireRole("lawyer", "investigator"),
+  convertCaseRequest
 );
 
 module.exports = router;

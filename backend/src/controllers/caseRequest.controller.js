@@ -11,6 +11,8 @@ const createCaseRequestSchema = z.object({
   description: z.string().trim().min(20).max(5000),
 });
 
+const { randomUUID } = require("crypto");
+
 const createCaseRequest = async (req, res) => {
   const validation = createCaseRequestSchema.safeParse(req.body);
 
@@ -399,10 +401,284 @@ const reviewCaseRequest = async (req, res) => {
   }
 };
 
+const getCaseRequestResponses = async (req, res) => {
+  // Validate the case request ID.
+  const idValidation = z.string().uuid().safeParse(req.params.id);
+
+  if (!idValidation.success) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid case request ID",
+    });
+  }
+
+  try {
+    const requestId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // Verify that the current user owns or received this request.
+    const accessResult = await pool.query(
+      `SELECT id
+       FROM case_requests
+       WHERE id = $1
+         AND (
+           (client_id = $2 AND $3 = 'client')
+           OR
+           (professional_id = $2 AND $3 IN ('lawyer', 'investigator'))
+         )`,
+      [requestId, userId, userRole]
+    );
+
+    // Return 404 for both nonexistent and unauthorized requests.
+    if (accessResult.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Case request not found",
+      });
+    }
+
+    // Retrieve the response history in chronological order.
+    const historyResult = await pool.query(
+      `SELECT
+         crr.id,
+         crr.request_id,
+         crr.professional_id,
+         u.full_name AS professional_name,
+         crr.previous_status,
+         crr.new_status,
+         crr.action,
+         crr.response_message,
+         crr.created_at
+       FROM case_request_responses crr
+       INNER JOIN users u ON u.id = crr.professional_id
+       WHERE crr.request_id = $1
+       ORDER BY crr.created_at ASC`,
+      [requestId]
+    );
+
+    return res.status(200).json({
+      success: true,
+      total: historyResult.rows.length,
+      responses: historyResult.rows,
+    });
+  } catch (error) {
+    console.error("Get case request responses error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve response history",
+    });
+  }
+};
+
+const convertCaseRequest = async (req, res) => {
+  const idValidation = z.string().uuid().safeParse(req.params.id);
+
+  if (!idValidation.success) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid case request ID",
+    });
+  }
+
+  const professionalId = req.user.id;
+  const professionalRole = req.user.role;
+  const requestId = req.params.id;
+
+  const db = await pool.connect();
+  let transactionStarted = false;
+
+  try {
+    await db.query("BEGIN");
+    transactionStarted = true;
+
+    // Lock the request and verify professional ownership.
+    const requestResult = await db.query(
+      `SELECT
+         id,
+         client_id,
+         professional_id,
+         requested_case_title,
+         description,
+         status,
+         converted_case_id
+       FROM case_requests
+       WHERE id = $1
+         AND professional_id = $2
+       FOR UPDATE`,
+      [requestId, professionalId]
+    );
+
+    if (requestResult.rowCount === 0) {
+      await db.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(404).json({
+        success: false,
+        message: "Case request not found",
+      });
+    }
+
+    const caseRequest = requestResult.rows[0];
+
+    // Only accepted requests can become formal cases.
+    if (caseRequest.status !== "accepted") {
+      await db.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(409).json({
+        success: false,
+        message: "Only accepted requests can be converted into cases",
+        currentStatus: caseRequest.status,
+      });
+    }
+
+    if (caseRequest.converted_case_id) {
+      await db.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(409).json({
+        success: false,
+        message: "This request has already been converted",
+        caseId: caseRequest.converted_case_id,
+      });
+    }
+
+    // Generate a unique case ID and human-readable case number.
+    const caseId = randomUUID();
+    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const caseNumber = `EV-${datePart}-${caseId.slice(0, 8).toUpperCase()}`;
+
+    // Create the formal case in pending approval status.
+    const caseResult = await db.query(
+      `INSERT INTO cases (
+         id,
+         case_number,
+         title,
+         description,
+         status,
+         created_by
+       )
+       VALUES ($1, $2, $3, $4, 'pending_approval', $5)
+       RETURNING
+         id,
+         case_number,
+         title,
+         description,
+         status,
+         created_by,
+         created_at`,
+      [
+        caseId,
+        caseNumber,
+        caseRequest.requested_case_title,
+        caseRequest.description,
+        professionalId,
+      ]
+    );
+
+    const newCase = caseResult.rows[0];
+
+    // Link the original client to the formal case.
+    await db.query(
+      `INSERT INTO case_clients (
+         case_id,
+         client_id,
+         linked_by,
+         status
+       )
+       VALUES ($1, $2, $3, 'active')`,
+      [caseId, caseRequest.client_id, professionalId]
+    );
+
+    // The professional already accepted the original request.
+    // Therefore, create an accepted assignment.
+    await db.query(
+      `INSERT INTO case_assignments (
+         case_id,
+         professional_id,
+         assigned_by,
+         role,
+         status,
+         responded_at
+       )
+       VALUES ($1, $2, $2, $3, 'accepted', CURRENT_TIMESTAMP)`,
+      [caseId, professionalId, professionalRole]
+    );
+
+    // Submit the newly created case for Admin approval.
+    await db.query(
+      `INSERT INTO case_approvals (
+         case_id,
+         status
+       )
+       VALUES ($1, 'pending')`,
+      [caseId]
+    );
+
+    // Link the original request to the new formal case.
+    await db.query(
+      `UPDATE case_requests
+       SET
+         status = 'converted_to_case',
+         converted_case_id = $1,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [caseId, requestId]
+    );
+
+    // Record the complete conversion in the audit log.
+    await recordAuditLog(
+      {
+        actorId: professionalId,
+        action: "CASE_REQUEST_CONVERTED",
+        entityType: "case",
+        entityId: caseId,
+        details: {
+          requestId,
+          clientId: caseRequest.client_id,
+          caseNumber,
+          professionalRole,
+          initialStatus: "pending_approval",
+        },
+        ...getRequestAuditMetadata(req),
+      },
+      { client: db }
+    );
+
+    await db.query("COMMIT");
+    transactionStarted = false;
+
+    return res.status(201).json({
+      success: true,
+      message: "Case created and submitted for Admin approval",
+      case: newCase,
+    });
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Case conversion rollback error:", rollbackError);
+      }
+    }
+
+    console.error("Convert case request error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to convert case request",
+    });
+  } finally {
+    db.release();
+  }
+};
 
 module.exports = {
   createCaseRequest,
   getReceivedCaseRequests,
   reviewCaseRequest,
+  getCaseRequestResponses,
+  convertCaseRequest,
 };
-

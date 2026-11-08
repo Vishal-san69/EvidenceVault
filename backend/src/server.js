@@ -1,6 +1,7 @@
 
 require("dotenv").config();
 
+const caseRoutes = require("./routes/case.routes");
 const caseRequestRoutes = require("./routes/caseRequest.routes");
 const professionalRoutes = require("./routes/professional.routes");
 const express = require("express");
@@ -47,6 +48,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/professionals", professionalRoutes);
 app.use("/api/case-requests", caseRequestRoutes);
+app.use("/api/cases", caseRoutes);
 
 // Health check
 app.get("/api/health", async (req, res) => {
@@ -90,3 +92,6 @@ app.listen(PORT, async () => {
 
   await checkS3Connection();
 });
+
+
+
