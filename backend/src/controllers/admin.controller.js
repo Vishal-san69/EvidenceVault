@@ -15,6 +15,10 @@ const createProfessionalSchema = z.object({
   role: z.enum(["lawyer", "investigator"]),
 }).strict();
 
+const assignProfessionalSchema = z.object({
+  professional_id: z.string().uuid(),
+}).strict();
+
 // POST /api/admin/professionals
 const createProfessional = async (req, res) => {
   const client = await pool.connect();
@@ -352,9 +356,262 @@ const reviewCase = async (req, res) => {
   }
 };
 
+// POST /api/admin/cases/:id/assign
+const assignProfessional = async (req, res) => {
+  const caseValidation = z.string().uuid().safeParse(req.params.id);
+
+  if (!caseValidation.success) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid case ID",
+    });
+  }
+
+  const validation = assignProfessionalSchema.safeParse(req.body);
+
+  if (!validation.success) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid assignment details",
+      errors: validation.error.issues,
+    });
+  }
+
+  const caseId = req.params.id;
+  const { professional_id } = validation.data;
+  const adminId = req.user.id;
+
+  const db = await pool.connect();
+  let transactionStarted = false;
+
+  try {
+    await db.query("BEGIN");
+    transactionStarted = true;
+
+    // Lock the case to serialize assignment creation for this case.
+    const caseResult = await db.query(
+      `SELECT id, status
+       FROM cases
+       WHERE id = $1
+       FOR UPDATE`,
+      [caseId]
+    );
+
+    if (caseResult.rowCount === 0) {
+      await db.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(404).json({
+        success: false,
+        message: "Case not found",
+      });
+    }
+
+    // Verify that the selected professional exists.
+    const professionalResult = await db.query(
+      `SELECT id, full_name, email, role
+       FROM users
+       WHERE id = $1
+         AND role IN ('lawyer', 'investigator')`,
+      [professional_id]
+    );
+
+    if (professionalResult.rowCount === 0) {
+      await db.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(404).json({
+        success: false,
+        message: "Professional not found",
+      });
+    }
+
+    const professional = professionalResult.rows[0];
+
+    // Only allow assignments for cases that can receive professional work.
+const assignableStatuses = ["changes_requested", "active"];
+
+if (!assignableStatuses.includes(caseResult.rows[0].status)) {
+  await db.query("ROLLBACK");
+  transactionStarted = false;
+
+  return res.status(409).json({
+    success: false,
+    message: "Professional assignment is not allowed for this case status",
+    caseStatus: caseResult.rows[0].status,
+    allowedStatuses: assignableStatuses,
+  });
+}
+
+    // Prevent duplicate pending or accepted assignments.
+    const existingAssignment = await db.query(
+      `SELECT id, status
+       FROM case_assignments
+       WHERE case_id = $1
+         AND professional_id = $2
+         AND status IN ('pending_acceptance', 'accepted')
+       LIMIT 1`,
+      [caseId, professional_id]
+    );
+
+    if (existingAssignment.rowCount > 0) {
+      await db.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(409).json({
+        success: false,
+        message: "Professional already has an active or pending assignment",
+        assignment: existingAssignment.rows[0],
+      });
+    }
+
+    // Create assignment awaiting professional acceptance.
+    const assignmentResult = await db.query(
+      `INSERT INTO case_assignments (
+         case_id,
+         professional_id,
+         assigned_by,
+         role,
+         status
+       )
+       VALUES ($1, $2, $3, $4, 'pending_acceptance')
+       RETURNING *`,
+      [caseId, professional_id, adminId, professional.role]
+    );
+
+    const assignment = assignmentResult.rows[0];
+
+    await recordAuditLog(
+      {
+        actorId: adminId,
+        action: "CASE_PROFESSIONAL_ASSIGNED",
+        entityType: "case",
+        entityId: caseId,
+        details: {
+          assignmentId: assignment.id,
+          professionalId: professional.id,
+          professionalEmail: professional.email,
+          professionalRole: professional.role,
+          assignmentStatus: "pending_acceptance",
+        },
+        ...getRequestAuditMetadata(req),
+      },
+      { client: db }
+    );
+
+    await db.query("COMMIT");
+    transactionStarted = false;
+
+    return res.status(201).json({
+      success: true,
+      message: "Professional assignment created and awaiting acceptance",
+      assignment,
+    });
+  }   catch (error) {
+    if (transactionStarted) {
+      try {
+        await db.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Assignment rollback failed");
+      }
+    }
+
+    console.error("Assign professional error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to assign professional",
+    });
+  } finally {
+    db.release();
+  }
+};
+
+
+// GET /api/admin/assignments
+const listAssignments = async (req, res) => {
+  try {
+    const [assignmentsResult, countsResult] = await Promise.all([
+      pool.query(
+        `SELECT
+           ca.id,
+           ca.case_id,
+           ca.professional_id,
+           ca.assigned_by,
+           ca.role,
+           ca.status,
+           ca.assigned_at,
+           ca.responded_at,
+           ca.updated_at,
+
+           c.case_number,
+           c.title AS case_title,
+           c.status AS case_status,
+
+           professional.full_name AS professional_name,
+           professional.email AS professional_email,
+
+           admin.full_name AS assigned_by_name,
+           admin.email AS assigned_by_email
+
+         FROM case_assignments ca
+
+         INNER JOIN cases c
+           ON c.id = ca.case_id
+
+         INNER JOIN users professional
+           ON professional.id = ca.professional_id
+
+         LEFT JOIN users admin
+           ON admin.id = ca.assigned_by
+
+         ORDER BY ca.assigned_at DESC
+         LIMIT 200`
+      ),
+
+      pool.query(
+        `SELECT
+           status,
+           COUNT(*)::int AS total
+         FROM case_assignments
+         GROUP BY status`
+      ),
+    ]);
+
+    const counts = {
+      pending_acceptance: 0,
+      accepted: 0,
+      declined: 0,
+      revoked: 0,
+    };
+
+    for (const row of countsResult.rows) {
+      if (Object.prototype.hasOwnProperty.call(counts, row.status)) {
+        counts[row.status] = row.total;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      total: assignmentsResult.rows.length,
+      counts,
+      assignments: assignmentsResult.rows,
+    });
+  } catch (error) {
+    console.error("List assignments error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve assignment records",
+    });
+  }
+};
+
 module.exports = {
   createProfessional,
   listProfessionals,
   listPendingCases,
   reviewCase,
+  assignProfessional,
+  listAssignments,
 };

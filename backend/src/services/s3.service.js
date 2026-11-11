@@ -31,16 +31,34 @@ const generateUploadUrl = async ({
   });
 };
 
-// Verify uploaded object
-const verifyUploadedObject = async (key) => {
-  const result = await s3Client.send(
-    new HeadObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
-    })
-  );
 
-  return result;
+const verifyUploadedObject = async (key) => {
+  console.log("S3 verification started");
+  console.log("Bucket:", BUCKET);
+  console.log("Object key:", key);
+
+  try {
+    const result = await s3Client.send(
+      new HeadObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+      })
+    );
+
+    console.log("S3 object found");
+    console.log("Content length:", result.ContentLength);
+    console.log("Content type:", result.ContentType);
+    console.log("Encryption:", result.ServerSideEncryption);
+
+    return result;
+  } catch (error) {
+    console.error("S3 HeadObject failed:", error.name);
+    console.error("AWS error:", error.message);
+    console.error("HTTP status:", error.$metadata?.httpStatusCode);
+    console.error("AWS request ID:", error.$metadata?.requestId);
+
+    throw error;
+  }
 };
 
 // Generate download URL
@@ -62,13 +80,41 @@ const generateDownloadUrl = async (key, originalName) => {
 };
 
 // Delete S3 object
+// Delete S3 object
 const deleteS3Object = async (key) => {
-  await s3Client.send(
-    new DeleteObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
-    })
-  );
+  try {
+    if (!key || typeof key !== "string") {
+      throw new Error("Invalid S3 object key");
+    }
+
+    const result = await s3Client.send(
+      new DeleteObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+      })
+    );
+
+    console.log("S3 deletion request accepted:", {
+      bucket: BUCKET,
+      key,
+      deleteMarker: result.DeleteMarker ?? false,
+      versionId: result.VersionId ?? null,
+      requestId: result.$metadata?.requestId,
+      httpStatus: result.$metadata?.httpStatusCode,
+    });
+
+    return result;
+
+  } catch (error) {
+    console.error("S3 deletion failed:", {
+      name: error.name,
+      message: error.message,
+      status: error.$metadata?.httpStatusCode,
+      requestId: error.$metadata?.requestId,
+    });
+
+    throw error;
+  }
 };
 
 module.exports = {

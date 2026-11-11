@@ -4,6 +4,7 @@ import {
   Activity,
   AlertCircle,
   BarChart3,
+  ClipboardList,
   PieChart,
   Bell,
   CheckCircle2,
@@ -25,10 +26,15 @@ import {
   ShieldCheck,
   Trash2,
   UploadCloud,
+  FolderKanban,
   X,
 } from "lucide-react";
 import { isAxiosError } from "axios";
 import api from "./services/api";
+import AssignmentList from "./components/assignments/AssignmentList";
+import CasesWorkspace from "./components/cases/CasesWorkspace";
+import AdminAssignments from "./components/assignments/AdminAssignments";
+import AdminAssignmentOverview from "./components/assignments/AdminAssignmentOverview";
 
 type User = {
   id: string;
@@ -446,13 +452,29 @@ export default function App() {
     };
   }, [documents, totalStorage]);
 
+ const isProfessional = ["lawyer", "investigator"].includes(
+  user?.role?.toLowerCase() ?? "",
+);
+
+const isAdmin = user?.role?.toLowerCase() === "admin";
   const navItems = [
-    { name: "Dashboard", icon: LayoutDashboard },
-    { name: "My Documents", icon: Files },
-    { name: "Storage Analytics", icon: PieChart },
-    { name: "Security Activity", icon: Activity },
-    { name: "Settings", icon: Settings },
-  ];
+  { name: "Dashboard", icon: LayoutDashboard },
+  { name: "My Documents", icon: Files },
+  { name: "Storage Analytics", icon: PieChart },
+  { name: "Security Activity", icon: Activity },
+  ...(isProfessional
+    ? [
+        { name: "Assignments", icon: ClipboardList },
+        { name: "Cases", icon: FolderKanban },
+      ]
+    : []),...(isAdmin
+  ? [
+      { name: "Admin Assignments", icon: ClipboardList },
+      { name: "Assignment Overview", icon: Activity },
+    ]
+  : []),
+  { name: "Settings", icon: Settings },
+];
 
   if (pageLoading) {
     return (
@@ -1211,6 +1233,19 @@ export default function App() {
             </section>
           )}
 
+          {activePage === "Assignments" && isProfessional && (
+            <AssignmentList />
+          )}
+
+          {activePage === "Cases" && isProfessional && (
+            <CasesWorkspace />
+          )}
+               {activePage === "Admin Assignments" && isAdmin && (
+  <AdminAssignments />
+)}
+               {activePage === "Assignment Overview" && isAdmin && (
+  <AdminAssignmentOverview />
+)}
           {activePage === "Settings" && (
             <section className="neu-panel max-w-3xl p-6 md:p-8">
               <h3 className="text-xl font-semibold">Account Settings</h3>

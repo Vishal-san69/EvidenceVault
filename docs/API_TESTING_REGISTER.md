@@ -943,3 +943,76 @@ The remaining work is to:
 10. Finalize project documentation and demonstration.
 
 **Important:** An implemented endpoint is not automatically a tested endpoint. Update the status only after recording the actual HTTP response and, where relevant, database or S3 verification evidence.
+
+
+
+$2b$12$uppLc3nN//Q9DHZNsqBg7e/L6vQpeZbXFMe57HcwicC0bEAdWvww.
+
+UPDATE users
+SET password_hash = '$2b$12$uppLc3nN//Q9DHZNsqBg7e/L6vQpeZbXFMe57HcwicC0bEAdWvww.',
+    updated_at = CURRENT_TIMESTAMP
+WHERE email = 'testlawyer@example.com'
+  AND role = 'lawyer';
+
+
+  # Test unauthenticated access
+try {
+    Invoke-RestMethod -Method Get `
+        -Uri "http://localhost:5001/api/professionals"
+}
+catch {
+    Write-Host "Unauthenticated HTTP Status:" ([int]$_.Exception.Response.StatusCode)
+    Write-Host "Response:" $_.ErrorDetails.Message
+}
+
+# Log in as the test lawyer
+
+
+
+# Test unauthenticated access
+try {
+    Invoke-RestMethod -Method Get `
+        -Uri "http://localhost:5001/api/professionals"
+}
+catch {
+    Write-Host "Unauthenticated HTTP Status:" ([int]$_.Exception.Response.StatusCode)
+    Write-Host "Response:" $_.ErrorDetails.Message
+}
+
+# Log in as the test lawyer
+
+
+
+$adminLogin = Invoke-RestMethod `
+    -Uri "http://localhost:5001/api/auth/login" `
+    -Method POST `
+    -ContentType "application/json" `
+    -Body '{"email":"vishaladmin@example.com","password":"AdminVishal69"}'
+
+$adminToken = $adminLogin.token
+
+Write-Host "Role:" $adminLogin.user.role
+
+
+
+
+
+$adminBody = @{
+    email = "vishaladmin@example.com"
+    password = "AdminVishal69"
+} | ConvertTo-Json
+
+$adminAuth = Invoke-RestMethod `
+    -Uri "http://localhost:5001/api/auth/login" `
+    -Method POST `
+    -ContentType "application/json" `
+    -Body $adminBody
+
+$adminToken = $adminAuth.token
+
+$adminHeaders = @{
+    Authorization = "Bearer $adminToken"
+}
+
+Write-Host "Admin authentication successful."
+$adminAuth.user | Format-List id, email, role

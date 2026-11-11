@@ -4,12 +4,13 @@ const express = require("express");
 const authenticateToken = require("../middleware/auth.middleware");
 const requireRole = require("../middleware/role.middleware");
 
-
 const {
   createProfessional,
   listProfessionals,
   listPendingCases,
   reviewCase,
+  assignProfessional,
+  listAssignments,
 } = require("../controllers/admin.controller");
 
 const router = express.Router();
@@ -18,13 +19,16 @@ const router = express.Router();
 router.use(authenticateToken);
 router.use(requireRole("admin"));
 
+// Professional management.
 router.post("/professionals", createProfessional);
 router.get("/professionals", listProfessionals);
 
-// Admin reviews pending formal cases.
+// Case management.
 router.get("/cases/pending", listPendingCases);
-
-// Admin approves, rejects, or requests changes.
 router.patch("/cases/:id/review", reviewCase);
+
+// Assignment management.
+router.get("/assignments", listAssignments);
+router.post("/cases/:id/assign", assignProfessional);
 
 module.exports = router;
